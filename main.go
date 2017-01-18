@@ -36,45 +36,48 @@ func main() {
 	}
 
 	for _, f := range files {
-		newFilePath := path.Join(dest.Name(), strings.TrimPrefix(f.Name(), src.Name()))
+		// compute new destination path and check if it already exists
+		newFilePath := path.Join(dest.Name(), strings.TrimPrefix(f, path.Clean(src.Name())))
+
+		if _, err = os.Stat(newFilePath); err == nil {
+			fmt.Printf("File [%s] already exists, skipping copy..\n", newFilePath)
+			continue
+		} else if err != nil && (err.(*os.PathError)).Err.Error() != "no such file or directory" {
+			fmt.Printf("Error stating file [%s]: %v\n", newFilePath, err)
+			continue
+		}
+
+		srcFile, err := os.Open(f)
+		if err != nil {
+			fmt.Printf("Error opening file [%s]: %v\n", f, err)
+			continue
+		}
 
 		if err := os.MkdirAll(path.Dir(newFilePath), os.ModePerm); err != nil {
 			fmt.Printf("Error creating file [%s]: %v\n", newFilePath, err)
 			continue
 		}
-
-		if _, err = os.Stat(newFilePath); err != nil {
-			pathError := err.(*os.PathError)
-			if pathError.Err.Error() != "no such file or directory" {
-				fmt.Printf("Error creating file [%s]: %v\n", newFilePath, err)
-				continue
-			}
-		} else {
-			fmt.Printf("File [%s] already exists, skipping copy..\n", newFilePath)
-			continue
-		}
-
-		newFile, err := os.Create(newFilePath)
+		destFile, err := os.Create(newFilePath)
 		if err != nil {
 			fmt.Printf("Error creating file [%s]: %v\n", newFilePath, err)
 			continue
 		}
 
-		if err = copy(f, newFile); err != nil {
+		if err = fileCopy(srcFile, destFile); err != nil {
 			fmt.Printf("Error copying file [%s]: %v\n", newFilePath, err)
 		}
 
-		fmt.Printf("Copied [%s] to [%s]\n", f.Name(), newFilePath)
+		fmt.Printf("Copied [%s] to [%s]\n", f, newFilePath)
 	}
 }
 
-func getFiles(inputFile *os.File) ([]*os.File, error) {
+func getFiles(inputFile *os.File) ([]string, error) {
 	s, err := inputFile.Stat()
 	if err != nil {
 		return nil, err
 	}
 
-	result := make([]*os.File, 0)
+	result := make([]string, 0)
 
 	if !s.IsDir() {
 		return result, nil
@@ -86,12 +89,13 @@ func getFiles(inputFile *os.File) ([]*os.File, error) {
 	}
 
 	for _, file := range files {
-		// TODO: remove *nix specific file separator
-		f, err := os.Open(fmt.Sprintf("%s/%s", inputFile.Name(), file.Name()))
+		f, err := os.Open(path.Join(inputFile.Name(), file.Name()))
 		if err != nil {
 			fmt.Printf("Couldn't open file: [%v]\n", file.Name())
 			continue
 		}
+
+		defer f.Close()
 
 		stat, err := f.Stat()
 		if err != nil {
@@ -105,14 +109,14 @@ func getFiles(inputFile *os.File) ([]*os.File, error) {
 				result = append(result, contents...)
 			}
 		} else {
-			result = append(result, f)
+			result = append(result, f.Name())
 		}
 	}
 
 	return result, nil
 }
 
-func copy(src, dest *os.File) error {
+func fileCopy(src, dest *os.File) error {
 	defer func() {
 		src.Close()
 		dest.Close()
@@ -157,3 +161,4 @@ func getDir(path string) *os.File {
 
 	return src
 }
+
