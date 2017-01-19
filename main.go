@@ -10,7 +10,6 @@ import (
 	"strings"
 )
 
-
 var logger *log.Logger
 
 func usage(program string) {
@@ -27,100 +26,102 @@ func main() {
 		usage(os.Args[0])
 	}
 
-	src := getDir(os.Args[1])
-	dest := getDir(os.Args[2])
-
-	files, err := getFiles(src)
+	src, err := getDir(os.Args[1])
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("Arg error: %v\n", err)
+		usage(os.Args[0])
 	}
 
-	for _, f := range files {
-		// compute new destination path and check if it already exists
-		newFilePath := path.Join(dest.Name(), strings.TrimPrefix(f, path.Clean(src.Name())))
+	dest, err := getDir(os.Args[2])
+	if err != nil {
+		fmt.Printf("Arg error: %v\n", err)
+		usage(os.Args[0])
+	}
 
-		if _, err = os.Stat(newFilePath); err == nil {
-			fmt.Printf("File [%s] already exists, skipping copy..\n", newFilePath)
-			continue
-		} else if err != nil && (err.(*os.PathError)).Err.Error() != "no such file or directory" {
-			fmt.Printf("Error stating file [%s]: %v\n", newFilePath, err)
-			continue
-		}
-
-		srcFile, err := os.Open(f)
-		if err != nil {
-			fmt.Printf("Error opening file [%s]: %v\n", f, err)
-			continue
-		}
-
-		if err := os.MkdirAll(path.Dir(newFilePath), os.ModePerm); err != nil {
-			fmt.Printf("Error creating file [%s]: %v\n", newFilePath, err)
-			continue
-		}
-		destFile, err := os.Create(newFilePath)
-		if err != nil {
-			fmt.Printf("Error creating file [%s]: %v\n", newFilePath, err)
-			continue
-		}
-
-		if err = fileCopy(srcFile, destFile); err != nil {
-			fmt.Printf("Error copying file [%s]: %v\n", newFilePath, err)
-		}
-
-		fmt.Printf("Copied [%s] to [%s]\n", f, newFilePath)
+	if err := syncFiles(src, src, dest); err != nil {
+		fmt.Printf("Error syncing directory %s: %v\n", src.Name(), err)
+		os.Exit(1)
 	}
 }
 
-func getFiles(inputFile *os.File) ([]string, error) {
-	s, err := inputFile.Stat()
+func syncFiles(input *os.File, src, dest *os.File) error {
+	stat, err := input.Stat()
 	if err != nil {
-		return nil, err
+		fmt.Printf("Error processing %s: %v\n", input.Name(), err)
+		return nil
+	} else if !stat.IsDir() {
+		return nil
 	}
 
-	result := make([]string, 0)
-
-	if !s.IsDir() {
-		return result, nil
-	}
-
-	files, err := ioutil.ReadDir(inputFile.Name())
+	files, err := ioutil.ReadDir(input.Name())
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	for _, file := range files {
-		f, err := os.Open(path.Join(inputFile.Name(), file.Name()))
+	for _, fInfo := range files {
+		fName := path.Join(input.Name(), fInfo.Name())
+
+		// TODO: doesn't handle symlinks
+		f, err := os.Open(fName)
 		if err != nil {
-			fmt.Printf("Couldn't open file: [%v]\n", file.Name())
+			fmt.Printf("Couldn't open file %s: %v\n", fName, err)
 			continue
 		}
-
 		defer f.Close()
 
-		stat, err := f.Stat()
+		fStat, err := f.Stat()
 		if err != nil {
-			fmt.Printf("Couldn't stat file: [%v]\n", file.Name())
+			fmt.Printf("Couldn't stat file %s: %v\n", fName, err)
 			continue
 		}
 
-		if stat.IsDir() {
-			contents, err := getFiles(f)
-			if err == nil {
-				result = append(result, contents...)
+		if fStat.IsDir() {
+			if err := syncFiles(f, src, dest); err != nil {
+				fmt.Printf("Error syncing directory %s: %v\n", fName, err)
 			}
 		} else {
-			result = append(result, f.Name())
+			newFName := path.Join(dest.Name(), strings.TrimPrefix(fName, path.Clean(src.Name())))
+
+			// check if file already exists
+			if _, err = os.Stat(newFName); err == nil {
+				fmt.Printf("File %s already exists, skipping copy..\n", newFName)
+				continue
+			} else if err != nil && (err.(*os.PathError)).Err.Error() != "no such file or directory" {
+				fmt.Printf("Error opening file %s: %v\n", newFName, err)
+				continue
+			}
+
+			// make sure parent dirs exist
+			if err := os.MkdirAll(path.Dir(newFName), os.ModePerm); err != nil {
+				fmt.Printf("Error creating file %s: %v\n", newFName, err)
+				continue
+			}
+
+			destFile, err := os.Create(newFName)
+			if err != nil {
+				fmt.Printf("Error creating file %s: %v\n", newFName, err)
+				continue
+			}
+
+			if err := fileCopy(f, destFile); err != nil {
+				fmt.Printf("Error copying file %s to %s: %v\n", fName, newFName, err)
+			}
+
+			fmt.Printf("Copied %s to %s\n", f.Name(), destFile.Name())
+
+			defer func(fs... *os.File) {
+				for _, f := range fs {
+					f.Close()
+				}
+			}(f, destFile)
 		}
 	}
 
-	return result, nil
+	return nil
 }
 
 func fileCopy(src, dest *os.File) error {
-	defer func() {
-		src.Close()
-		dest.Close()
-	}()
+	//TODO: Needs to handle symlinks
 
 	nw, err := io.Copy(dest, src)
 	if err != nil {
@@ -143,22 +144,21 @@ func fileCopy(src, dest *os.File) error {
 	return nil
 }
 
-func getDir(path string) *os.File {
+func getDir(path string) (*os.File, error) {
 	src, err := os.Open(path)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	info, err := src.Stat()
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	if !info.IsDir() {
-		fmt.Printf("Invalid argument: %s\n", path)
-		usage(os.Args[0])
+		return nil, fmt.Errorf("%s is not a dir!", path)
 	}
 
-	return src
+	return src, nil
 }
 
