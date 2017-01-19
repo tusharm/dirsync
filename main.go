@@ -63,7 +63,7 @@ func syncFiles(input *os.File, src, dest *os.File) error {
 			fmt.Printf("Couldn't open file %s: %v\n", fName, err)
 			continue
 		}
-		defer f.Close()
+		defer close(f)
 
 		fStat, err := f.Stat()
 		if err != nil {
@@ -98,18 +98,13 @@ func syncFiles(input *os.File, src, dest *os.File) error {
 				fmt.Printf("Error creating file %s: %v\n", newFName, err)
 				continue
 			}
+			defer close(destFile)
 
 			if err := fileCopy(f, destFile); err != nil {
 				fmt.Printf("Error copying file %s to %s: %v\n", fName, newFName, err)
 			}
 
 			fmt.Printf("Copied %s to %s\n", f.Name(), destFile.Name())
-
-			defer func(fs... *os.File) {
-				for _, f := range fs {
-					f.Close()
-				}
-			}(f, destFile)
 		}
 	}
 
@@ -156,5 +151,11 @@ func getDir(path string) (*os.File, error) {
 	}
 
 	return src, nil
+}
+
+func close(f *os.File) {
+	if err := f.Close(); err != nil {
+		fmt.Printf("Error closing file %s: %v\n", f.Name(), err)
+	}
 }
 
