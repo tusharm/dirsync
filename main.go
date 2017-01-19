@@ -10,16 +10,12 @@ import (
 	"strings"
 )
 
-var logger *log.Logger
-
 func usage(program string) {
 	fmt.Printf("Usage: %s <src-dir> <dest-dir>\n", program)
 	os.Exit(1)
 }
 
 func main() {
-	logger = log.New(os.Stderr, "", 0)
-
 	params := os.Args[1:]
 	if len(params) < 2 {
 		fmt.Printf("Missing required args\n")
